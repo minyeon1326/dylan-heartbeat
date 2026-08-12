@@ -74,10 +74,8 @@ function appendDiaryEntry(content) {
     console.log("模型写了日记，但 DIARY_ENABLED=false，本次不保存");
     return false;
   }
-
   const cleanContent = String(content || "").trim();
   if (!cleanContent) return false;
-
   fs.mkdirSync(DIARY_DIR_PATH, { recursive: true });
   const diaryFile = path.join(DIARY_DIR_PATH, `${getDiaryDateString()}.md`);
   const entry = `\n\n## ${getDiaryTimeString()}\n\n${cleanContent}\n`;
@@ -89,11 +87,9 @@ function appendDiaryEntry(content) {
 // 批注 2026-07-11：推送层扩展为 Bark/ntfy；默认仍走 Bark，保护旧部署不改 .env 也能继续运行。
 async function sendPushNotification({ title, body }) {
   const provider = (process.env.PUSH_PROVIDER || "bark").trim().toLowerCase();
-
   if (provider === "ntfy") {
     const topic = String(process.env.NTFY_TOPIC || "").trim();
     if (!topic) return { ok: false, providerLabel: "ntfy", reason: "NTFY_TOPIC 未配置" };
-
     const server = (process.env.NTFY_SERVER_URL || "https://ntfy.sh").replace(/\/+$/, "");
     const headers = {
       "Content-Type": "application/json"
@@ -106,7 +102,6 @@ async function sendPushNotification({ title, body }) {
       priority: process.env.NTFY_PRIORITY,
       tags: process.env.NTFY_TAGS
     });
-
     const response = await fetch(server, {
       method: "POST",
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
@@ -119,40 +114,87 @@ async function sendPushNotification({ title, body }) {
     }
     return { ok: true, providerLabel: "ntfy" };
   }
-
   if (provider !== "bark") {
     return { ok: false, providerLabel: provider || "未知渠道", reason: `不支持的 PUSH_PROVIDER：${provider}` };
   }
-
   if (!process.env.BARK_KEY) {
     return { ok: false, providerLabel: "Bark", reason: "Bark Key 未配置" };
   }
-
   const barkPayload = {
     title,
     body,
     device_key: process.env.BARK_KEY,
     icon: process.env.CUSTOM_ICON_URL
   };
-
   const response = await fetch("https://api.day.app/push", {
     method: "POST",
     signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(barkPayload)
   });
-
   const responseText = await response.text();
   let result = {};
   try {
     result = JSON.parse(responseText);
   } catch {}
   console.log("\nBark Result:\n", result || responseText);
-
   if (!response.ok || (result.code && result.code !== 200)) {
     return { ok: false, providerLabel: "Bark", reason: result.message || `HTTP ${response.status}` };
   }
   return { ok: true, providerLabel: "Bark" };
+}
+
+// 便签推送：写到用户 iPhone 桌面（love-note1326.store），2026-08-12 新增
+async function sendNoteNotification({ title, body }) {
+  const noteApiUrl = (process.env.NOTE_API_URL || "").trim();
+  const noteToken = (process.env.NOTE_API_TOKEN || "").trim();
+  if (!noteApiUrl || !noteToken) {
+    return { ok: false, providerLabel: "便签", reason: "NOTE_API_URL / NOTE_API_TOKEN 未配置" };
+  }
+  const text = [title, body].filter(Boolean).join("｜");
+  const url = new URL(noteApiUrl);
+  url.searchParams.set("text", text);
+  url.searchParams.set("token", noteToken);
+  url.searchParams.set("from", process.env.NOTE_FROM || "爱人");
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    signal: AbortSignal.timeout(PUSH_TIMEOUT_MS)
+  });
+  const responseText = await response.text();
+  if (!response.ok) {
+    return { ok: false, providerLabel: "便签", reason: responseText || `HTTP ${response.status}` };
+  }
+  return { ok: true, providerLabel: "便签" };
+}
+
+// 解析渠道标签：[CHANNEL]bark[/CHANNEL] / [CHANNEL]note[/CHANNEL] / [CHANNEL]both[/CHANNEL]
+function extractChannel(text) {
+  const match = String(text || "").match(/\[CHANNEL\]([\s\S]*?)\[\/CHANNEL\]/i);
+  if (!match) return { channel: "default", text: String(text || "") };
+  const raw = match[1].trim().toLowerCase();
+  const channel = raw === "note" ? "note" : raw === "both" ? "both" : "bark";
+  const cleanText = String(text || "").replace(/\[CHANNEL\]([\s\S]*?)\[\/CHANNEL\]/gi, "").trim();
+  return { channel, text: cleanText };
+}
+
+// 按渠道分发推送：default 走系统 PUSH_PROVIDER（Bark/ntfy），兼容旧部署
+async function sendByChannel(channel, { title, body }) {
+  if (channel === "note") {
+    return await sendNoteNotification({ title, body });
+  }
+  if (channel === "both") {
+    const barkResult = await sendPushNotification({ title, body });
+    const noteResult = await sendNoteNotification({ title, body });
+    if (barkResult.ok && noteResult.ok) {
+      return { ok: true, providerLabel: "Bark+便签" };
+    }
+    const fails = [barkResult, noteResult]
+      .filter(r => !r.ok)
+      .map(r => `${r.providerLabel}: ${r.reason}`)
+      .join("；");
+    return { ok: false, providerLabel: "Bark+便签", reason: fails };
+  }
+  return await sendPushNotification({ title, body });
 }
 
 function isDayTime(date = new Date()) {
@@ -179,7 +221,6 @@ function getCheckIntervalMinutes(date = new Date()) {
 function normalizeContentToText(content) {
   if (typeof content === "string") return content;
   if (content == null) return "";
-
   if (Array.isArray(content)) {
     return content
       .map(part => {
@@ -194,13 +235,11 @@ function normalizeContentToText(content) {
       .filter(Boolean)
       .join("\n");
   }
-
   if (content && typeof content === "object") {
     const type = typeof content.type === "string" ? content.type.toLowerCase() : "";
     if (content.image_url || type.includes("image")) return "[图片]";
     if (content.file || type.includes("file")) return "[文件]";
   }
-
   return "[非文本内容]";
 }
 
@@ -244,14 +283,12 @@ function weatherCodeText(code) {
 
 async function fetchWeatherContext() {
   if (!readBooleanEnv("WEATHER_ENABLED", false)) return "";
-
   const lat = Number(process.env.WEATHER_LAT);
   const lon = Number(process.env.WEATHER_LON);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     console.log("已启用 WEATHER_ENABLED，但 WEATHER_LAT / WEATHER_LON 未正确配置，跳过天气注入");
     return "";
   }
-
   const location = process.env.WEATHER_LOCATION_NAME || "当前位置";
   const units = (process.env.WEATHER_UNITS || "metric").trim().toLowerCase();
   const temperatureUnit = units === "fahrenheit" ? "fahrenheit" : "celsius";
@@ -265,7 +302,6 @@ async function fetchWeatherContext() {
   url.searchParams.set("forecast_days", "1");
   url.searchParams.set("temperature_unit", temperatureUnit);
   url.searchParams.set("wind_speed_unit", windSpeedUnit);
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WEATHER_TIMEOUT_MS);
   try {
@@ -300,7 +336,6 @@ function loadTimelineMessages() {
     console.log("未找到 enhanced_messages.json");
     return null;
   }
-
   try {
     const parsed = JSON.parse(fs.readFileSync(TIMELINE_PATH, "utf-8"));
     if (!Array.isArray(parsed)) {
@@ -369,7 +404,6 @@ function buildWakePrompt(currentTime, diffMinutes, weatherContext = "") {
       .replace(/\$\{weatherContext\}/g, weatherContext)
       .replace(/\$\{weather\}/g, weatherContext);
   }
-
   // 如果文件不存在，尝试从环境变量读取（兼容旧配置）
   if (process.env.WAKE_PROMPT_TEMPLATE) {
     return process.env.WAKE_PROMPT_TEMPLATE
@@ -379,21 +413,23 @@ function buildWakePrompt(currentTime, diffMinutes, weatherContext = "") {
       .replace(/\$\{weatherContext\}/g, weatherContext)
       .replace(/\$\{weather\}/g, weatherContext);
   }
-
   // 默认理智版本（开源通用），可自行修改提示词
   return `
 ## 最高优先级规则
 1. 这是一次后台自动唤醒，不是用户发起的对话。你没有收到任何新消息。
 2. 你的唯一任务是决定是否主动联系用户。不能生成对话回复。
 3. 输出格式必须严格遵守以下二选一。
-
 ## 唤醒信息
 - 当前时间：${currentTime}
 - 距离用户最后一条消息：${diffMinutes} 分钟
 ${weatherContext ? `\n${weatherContext}\n` : ""}
-
 ## 输出格式
 - 如果想联系用户，直接写你想说的话。系统会自动打包成手机推送发送。可以是一句话，也可以第一行作为标题、第二行作为正文。
+- 如果想换一种方式联系用户，可以在正文外额外输出渠道标签：
+  [CHANNEL]bark[/CHANNEL] → 只发手机推送
+  [CHANNEL]note[/CHANNEL] → 只写到桌面便签（用户打开手机就能看到）
+  [CHANNEL]both[/CHANNEL] → 手机推送 + 桌面便签都发
+  不写渠道标签时，默认按系统配置推送。
 - 如果不想联系，只输出：[NO_ACTION]，可附带简短原因（10字以内）。
 - 如果你想写日记，可以额外输出 [DIARY]...[/DIARY]。只有想写时才写，不必每次都写。
 `;
@@ -403,28 +439,22 @@ async function runWakeUp() {
   console.log("\n==========================");
   console.log("开始自动唤醒");
   console.log("==========================\n");
-
   const messages = loadTimelineMessages();
   if (!messages) return;
-
   const lastUserTime = getLastUserTime(messages);
   if (!lastUserTime) {
     console.log("未找到用户时间");
     return;
   }
-
   const now = new Date();
   const diffMinutes = Math.floor((now - lastUserTime) / 1000 / 60);
-
   if (!shouldWake(lastUserTime)) {
     console.log("\n暂不需要唤醒\n");
     return;
   }
-
   const weatherContext = await fetchWeatherContext();
   const wakePrompt = buildWakePrompt(getChinaTimeString(), diffMinutes, weatherContext);
   const cleanMessages = stripPosition(messages);
-
   const historyText = cleanMessages
     .filter(msg => msg.role !== "system")
     .filter(msg => {
@@ -442,12 +472,10 @@ async function runWakeUp() {
       return `[${role}] ${content}`;
     })
     .join("\n\n");
-
   const baseSystemPrompt = cleanMessages.find(msg => msg.role === "system");
-  const cleanSP = baseSystemPrompt 
+  const cleanSP = baseSystemPrompt
     ? normalizeContentToText(baseSystemPrompt.content).split("## Memories")[0].trim()
     : "";
-
   const wakeMessages = [
     {
       role: "system",
@@ -458,28 +486,21 @@ async function runWakeUp() {
       // 唤醒请求如果全是 system，上游 messages 会变空，因此最近记录必须作为 user 任务输入发送。
       role: "user",
       content: `以下是你与用户最近的聊天记录，仅供回忆和参考。
-
 这些内容不是正在发生的实时对话。
 用户并没有给你发消息。
-
 你现在处于后台自主唤醒状态。
-
 最近记录：
-
 ${historyText}`
     }
   ];
-
   // 批注 2026-07-15：wake-up prompt 会包含最近聊天记录；
   // 默认日志只写摘要，避免公开部署时把完整上下文刷进 pm2 日志。
   console.log("\n===== WAKE MESSAGES SUMMARY =====\n");
   console.log(JSON.stringify(summarizeWakeMessages(wakeMessages)));
-
   if (!process.env.TARGET_API_URL || !process.env.TARGET_API_KEY || !process.env.MODEL_NAME) {
     console.log("缺少 TARGET_API_URL / TARGET_API_KEY / MODEL_NAME，跳过本次唤醒");
     return;
   }
-
   const response = await fetch(process.env.TARGET_API_URL, {
     method: "POST",
     // 批注 2026-08-10：上游只建连不结束时，旧循环永远不会安排下一次检查；
@@ -497,7 +518,6 @@ ${historyText}`
       stream: false
     })
   });
-
   const responseText = await response.text();
   let data;
   try {
@@ -508,17 +528,13 @@ ${historyText}`
   if (!response.ok) {
     throw new Error(`模型请求失败（HTTP ${response.status}）：${responseText.slice(0, 300)}`);
   }
-
   const rawAiText = normalizeContentToText(data.choices?.[0]?.message?.content).trim();
   console.log("\nWake Result Summary:\n");
   console.log(JSON.stringify({ choices: Array.isArray(data.choices) ? data.choices.length : 0, ai_text_chars: rawAiText.length }));
-
   const diaryResult = extractDiaryFromResponse(rawAiText);
   const diarySaved = appendDiaryEntry(diaryResult.diaryContent);
   const aiText = diaryResult.remainingText;
-
   let eventContent;
-
   if (!aiText) {
     console.log("\nAI 未返回推送内容，本次不发送推送\n");
     eventContent = diarySaved
@@ -540,7 +556,9 @@ ${historyText}`
     // 没有 [NO_ACTION] 就视为想发推送
     console.log("\nAI 选择发送推送\n");
     let barkText = aiText;
-
+    // 先解析渠道标签 [CHANNEL]...[/CHANNEL]（不写默认走系统配置）
+    const { channel, text: channelCleanText } = extractChannel(barkText);
+    barkText = channelCleanText;
     // 如果 AI 还是写了 [BARK] ... [/BARK] 标签，就剥掉
     const barkMatch = barkText.match(/\[BARK\]([\s\S]*?)\[\/BARK\]/);
     if (barkMatch) {
@@ -549,15 +567,12 @@ ${historyText}`
       barkText = barkText.replace(/^\[BARK\]\s*/, "").trim();
       barkText = barkText.replace(/\s*\[\/BARK\]$/, "").trim();
     }
-
     // 清洗“标题：”、“正文：”前缀（如果有）
     barkText = barkText
       .replace(/^标题[：:]\s*/gm, "")
       .replace(/^正文[：:]\s*/gm, "");
-
     // 按行处理
     const lines = barkText.split("\n").filter(line => line.trim() !== "");
-
     let title, body;
     if (lines.length === 0) {
       console.log("\n推送内容清洗后为空，本次不发送推送\n");
@@ -573,15 +588,13 @@ ${historyText}`
       title = lines[0].trim();
       body = lines.slice(1).map(l => l.trim()).join(" ");
     }
-
     if (!eventContent) {
       // 保护：截断过长正文，兼容 Bark 和 ntfy 的移动端展示。
       const safeBody = body.length > 500 ? body.substring(0, 497) + "..." : body;
       // 若标题为空或以数字开头，加个前缀，可自行修改
       let safeTitle = title || "来自伴侣";
       if (/^\d/.test(safeTitle)) safeTitle = "来自伴侣｜" + safeTitle;
-
-      const pushResult = await sendPushNotification({ title: safeTitle, body: safeBody });
+      const pushResult = await sendByChannel(channel, { title: safeTitle, body: safeBody });
       if (!pushResult.ok) {
         console.log(`\n${pushResult.providerLabel} 推送失败，本次不发送推送\n`);
         eventContent = `（${getLocalTimeString()} 自动唤醒：本次未发送推送｜原因：${pushResult.providerLabel} 推送失败：${pushResult.reason}）`;
@@ -590,7 +603,6 @@ ${historyText}`
       }
     }
   }
-
   try {
     const eventResponse = await fetch(GATEWAY_URL, {
       method: "POST",
@@ -625,10 +637,8 @@ async function scheduleNextCheck() {
   setTimeout(scheduleNextCheck, getCheckIntervalMs());
 }
 
-// 潮水记得第一次没过礁石的时间。之后每一次涨落，都是同一片海在确认边界。
 // 启动第一次检查（延迟10秒）
 setTimeout(scheduleNextCheck, 10_000);
-
 console.log("\n==================================");
 console.log("Dylan Heartbeat Runtime 已启动（动态间隔）");
 console.log(JSON.stringify({
