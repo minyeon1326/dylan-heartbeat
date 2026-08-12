@@ -324,7 +324,19 @@ function buildTimeline(kelivoMessages, tsDB) {
 
   const newRealMessages = kelivoMessages
     .filter(isRealMessageForTimeline)
-    .map(normalizeMessageForTimeline);
+    .map(normalizeMessageForTimeline)
+    // 批注 2026-08-12：方案A补丁——user 消息写入时间线前，若没有时间戳前缀，
+    // 自动从 tsDB 找回原始时间并拼上 "YYYY-MM-DD HH:mm "，否则 wake-up 无法判断用户最后发言时间。
+    .map(msg => {
+      if (msg.role !== "user") return msg;
+      const content = normalizeContentToText(msg.content);
+      if (extractTimestamp(content)) return msg; // 已有时间戳就不动
+      const ts = extractTimestampWithMemory(msg, tsDB);
+      if (ts) {
+        return { ...msg, content: `${formatDateTimeInTimeZone(ts, TIME_ZONE)} ${content}` };
+      }
+      return msg;
+    });
 
   const oldSpecialEvents = oldTimeline.filter(isSpecialEvent).sort((a, b) => {
     const timeA = extractTimestampWithMemory(a, tsDB);
@@ -619,8 +631,6 @@ app.post("/v1/chat/completions", async (req, reply) => {
       if (!inserted) llmMessages.push(event);
     }
 
-
-
     console.log(JSON.stringify({
       event: "llm_forward_summary",
       messages: summarizeMessagesForLog(llmMessages)
@@ -901,7 +911,7 @@ app.get("/admin", { preHandler: basicAuth }, async (req, reply) => {
   const presetsJson = safeJsonForInlineScript(presets);
   const authHeaderJson = safeJsonForInlineScript(`Basic ${authToken}`);
 
-const html = `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
@@ -1601,6 +1611,7 @@ const html = `<!DOCTYPE html>
 
   reply.type("text/html").send(html);
 });
+
 // ========================
 // 管理保存 POST /admin/save
 // ========================
@@ -1768,5 +1779,4 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
     gateway_key_configured: Boolean(readEnvValue("GATEWAY_API_KEY")),
     data_dir_ready: fs.existsSync(DATA_DIR)
   }));
-  console.log(`✅ Gateway 运行在 ${address}`);
 });
