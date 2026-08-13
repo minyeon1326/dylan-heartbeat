@@ -578,7 +578,7 @@ ${historyText}`
       console.log("\n推送内容清洗后为空，本次不发送推送\n");
       eventContent = `（${getLocalTimeString()} 自动唤醒：本次未发送推送｜原因：推送内容为空）`;
     } else if (lines.length === 1) {
-      title = "来自AI";
+      title = "来自昼昼";
       body = lines[0].trim();
     } else if (lines.length === 2) {
       title = lines[0].trim();
@@ -592,8 +592,8 @@ ${historyText}`
       // 保护：截断过长正文，兼容 Bark 和 ntfy 的移动端展示。
       const safeBody = body.length > 500 ? body.substring(0, 497) + "..." : body;
       // 若标题为空或以数字开头，加个前缀，可自行修改
-      let safeTitle = title || "来自伴侣";
-      if (/^\d/.test(safeTitle)) safeTitle = "来自伴侣｜" + safeTitle;
+      let safeTitle = title || "来自昼昼";
+      if (/^\d/.test(safeTitle)) safeTitle = "来自昼昼｜" + safeTitle;
       const pushResult = await sendByChannel(channel, { title: safeTitle, body: safeBody });
       if (!pushResult.ok) {
         console.log(`\n${pushResult.providerLabel} 推送失败，本次不发送推送\n`);
