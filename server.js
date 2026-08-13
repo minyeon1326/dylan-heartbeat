@@ -325,17 +325,17 @@ function buildTimeline(kelivoMessages, tsDB) {
   const newRealMessages = kelivoMessages
     .filter(isRealMessageForTimeline)
     .map(normalizeMessageForTimeline)
-    // 批注 2026-08-12：方案A补丁——user 消息写入时间线前，若没有时间戳前缀，
-    // 自动从 tsDB 找回原始时间并拼上 "YYYY-MM-DD HH:mm "，否则 wake-up 无法判断用户最后发言时间。
+    // ===== 补丁 2026-08-13：user 消息写入时间线前自动补时间戳前缀 =====
+    // 优先从 tsDB 记忆库取该消息的时间；取不到就用当前时间兜底，
+    // 保证 enhanced_messages.json 里每条 user 消息都带 "YYYY-MM-DD HH:mm " 前缀，
+    // 这样 wake_up.js 的 getLastUserTime 一定能匹配到，不会再跳过推送。
     .map(msg => {
       if (msg.role !== "user") return msg;
-      const content = normalizeContentToText(msg.content);
-      if (extractTimestamp(content)) return msg; // 已有时间戳就不动
-      const ts = extractTimestampWithMemory(msg, tsDB);
-      if (ts) {
-        return { ...msg, content: `${formatDateTimeInTimeZone(ts, TIME_ZONE)} ${content}` };
-      }
-      return msg;
+      const text = String(normalizeContentToText(msg.content) || "");
+      if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]?)\d{1,2}[:：]\d{2}/.test(text.trim())) return msg;
+      const ts = extractTimestampWithMemory(msg, tsDB) || new Date();
+      const prefix = formatDateTimeInTimeZone(ts, TIME_ZONE);
+      return { ...msg, content: `${prefix} ${text}` };
     });
 
   const oldSpecialEvents = oldTimeline.filter(isSpecialEvent).sort((a, b) => {
