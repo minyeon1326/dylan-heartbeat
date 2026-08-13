@@ -1,7 +1,7 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "node gateway/server.js & node wake-up/wake_up.js & wait": "npm run start:railway",
+    "startCommand": "node gateway/server.js & node wake-up/wake_up.js & wait",
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 300
   }
